@@ -2,6 +2,7 @@ package de.hazeberry.keyboard
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
@@ -18,6 +19,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 
 private enum class Page { LETTERS, SYMBOLS, SYMBOLS2, EMOJI }
 private enum class Shift { OFF, ONCE, LOCK }
@@ -92,6 +94,7 @@ class KeyboardService : InputMethodService() {
             gravity = Gravity.CENTER_VERTICAL
         }
         bar.addView(status, LinearLayout.LayoutParams(0, dp(36), 1f))
+        bar.addView(smallKey("📁") { openFilePicker() })
         bar.addView(smallKey("Sig") { insertSignatureManually() })
         bar.addView(smallKey("🌐") { showKeyboardPicker() })
 
@@ -427,6 +430,31 @@ class KeyboardService : InputMethodService() {
         refreshStatus()
     }
 
+    /** Öffnet den Dateidialog. Das Ergebnis kommt über [FileBridge] zurück (siehe unten). */
+    private fun openFilePicker() {
+        val intent = Intent(this, FilePickerActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Dateidialog konnte nicht geöffnet werden.", Toast.LENGTH_SHORT)
+                .show()
+        }
+    }
+
+    /** Tippt eine zuvor gewählte Datei ein, sobald die Tastatur wieder im Eingabefeld steht. */
+    private fun insertPendingFile() {
+        if (!FileBridge.hasPending() || currentInputConnection == null) return
+        if (isSensitiveField()) {
+            // Dateiinhalt gehört nie in ein Passwortfeld.
+            FileBridge.clear()
+            return
+        }
+        val text = FileBridge.take() ?: return
+        type(text)
+        updateAutoCap()
+    }
+
     private fun showKeyboardPicker() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.showInputMethodPicker()
@@ -460,6 +488,7 @@ class KeyboardService : InputMethodService() {
         }
         render()
         updateAutoCap()
+        insertPendingFile()
         refreshStatus()
     }
 

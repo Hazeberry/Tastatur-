@@ -19,6 +19,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Dateiauswahl für die Datei-Taste der Tastatur (durchsichtig, nur intern) -->
+        <activity
+            android:name=".FilePickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/PickerTheme" />
+
         <!-- Die Tastatur -->
         <service
             android:name=".KeyboardService"

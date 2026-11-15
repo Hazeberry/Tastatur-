@@ -15,6 +15,8 @@ Internet-Berechtigung.
 - Die Signatur wird der nächsten Nachricht **vorangestellt**, sobald du das erste Zeichen tippst
 - Statuszeile über der Tastatur ("Noch 3 Nachricht(en) bis zur Signatur")
 - Taste **Sig** zum manuellen Einfügen
+- Taste **📁** öffnet deine Dateien: Textdatei wählen (Notizen, `.md`, `.yml`, Code ...), ihr
+  Inhalt wird ins Eingabefeld eingefügt
 - Passwortfelder werden nie gezählt und nie mit einer Signatur versehen
 - Hell/Dunkel folgt dem System
 
@@ -39,6 +41,24 @@ Lokal geht es mit Android Studio (Ordner öffnen) oder mit `gradle assembleDebug
 4. In der KI-App tippen. Über das Symbol 🌐 in der Tastatur wechselst du zurück zu deiner
    normalen Tastatur.
 
+## Dateien (📁)
+
+1. Ins Eingabefeld tippen, damit die Tastatur erscheint, dann auf **📁** tippen.
+2. Im Android-Dateidialog die Datei wählen. Der Dialog zeigt alle Ordner des Handys, den
+   Downloads-Ordner und installierte Cloud-Anbieter (Google Drive, Nextcloud ...).
+3. Du kommst zurück in die App. Sobald die Tastatur wieder erscheint (einmal ins Feld tippen,
+   falls sie zu ist), wird der Dateiinhalt eingefügt. Ist die Signatur fällig, steht sie davor.
+
+Details:
+
+- Es braucht **keine Speicher-Berechtigung**. Die App sieht nur die eine Datei, die du antippst,
+  und nur in diesem Moment. Der Inhalt liegt nur kurz im Arbeitsspeicher, wird nirgends
+  gespeichert und nicht verschickt.
+- Nur Textdateien (UTF-8). Binärdateien wie Bilder oder PDFs werden mit einer Meldung abgelehnt.
+- Maximal 50.000 Zeichen. Längere Dateien werden gekürzt, du siehst eine Meldung.
+- Wartet ein Dateiinhalt länger als 2 Minuten, verfällt er.
+- In Passwortfeldern wird nie eine Datei eingefügt.
+
 ## Tasker
 
 Aktion **Intent senden**, Ziel **Broadcast-Empfänger**, Paket `de.hazeberry.keyboard`.
@@ -59,6 +79,8 @@ geöffnet worden sein, sonst stellt Android keine Broadcasts zu.
   nicht. Eine Nachricht zählt, wenn ein gefülltes Eingabefeld leer wird (und du es nicht selbst
   mit der Löschtaste geleert hast). Das passt zu den üblichen Chat-Apps, kann aber bei
   Ausschneiden des ganzen Textes falsch zählen. Teste es einmal pro App.
+- Die Datei-Taste fügt nur **Text** ein. Dateien anhängen (Bilder, PDFs) kann eine Tastatur nur
+  in Apps, die das ausdrücklich unterstützen. Das ist nicht eingebaut.
 - Wortvorschläge, Swipe-Eingabe und Sprachen außer Deutsch (QWERTZ) gibt es nicht.
 - Die gebaute APK ist eine Debug-APK (mit Debug-Schlüssel signiert). Zum Verteilen über einen
   Store bräuchtest du einen eigenen Release-Schlüssel.
@@ -71,5 +93,7 @@ app/src/main/java/de/hazeberry/keyboard/
   SignatureStore.kt     Einstellungen, Zähler, Fälligkeitslogik
   TaskerReceiver.kt     Tasker-Schnittstelle
   SettingsActivity.kt   Einrichtung und Einstellungen
+  FilePickerActivity.kt Dateidialog und Einlesen der Textdatei
+  FileBridge.kt         Übergabe des Dateitexts an die Tastatur
 .github/workflows/build.yml
 ```
