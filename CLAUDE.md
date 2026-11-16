@@ -51,6 +51,22 @@ Robolectric lädt beim ersten Lauf das Android-Image (~150 MB) aus Maven Central
 5. Anhänge liegen als Kopie im Cache und werden über `AttachmentProvider` bereitgestellt
    (nicht exportiert, `grantUriPermissions`, Pfadprüfung, Aufräumen nach 24 h).
 
+### Termux-Anbindung (Taste ▶, Kürzel `;;name`)
+- `TermuxClient` startet `com.termux.app.RunCommandService` (Intent `com.termux.RUN_COMMAND`,
+  immer `bash` mit Argumenten, stdin per `RUN_COMMAND_STDIN`, Hintergrundmodus) und bekommt das
+  Ergebnis über einen **veränderbaren** PendingIntent an den nicht exportierten
+  `TermuxResultReceiver` zurück (Bundle `result`: stdout, stderr, exitCode, err == -1 heißt kein
+  interner Fehler). Callbacks laufen auf dem Main-Thread, genau einmal (auch bei Timeout).
+- `TermuxLogic` ist Android-frei: Konvention `~/.tastatur/aktionen/<name>` (stdin -> stdout) und
+  `~/.tastatur/kuerzel <kürzel>`, Namensprüfung, Kürzel-Erkennung, Fehlertexte und das
+  Einrichtungsskript (`SETUP_SCRIPT`, ein Kotlin-Rohstring: `$` als `${'$'}` schreiben).
+- `KeyboardService`: Ergebnis wird nur eingesetzt, wenn Paket, `fieldId` und Text unverändert sind
+  (`TermuxTarget` + `canApply`), sonst Zwischenablage. Kürzel lösen nur aus, wenn sie in
+  `typedBuffer` (von der Tastatur selbst getippt) stehen. Leere Ausgabe ersetzt nie Text.
+  Passwortfelder sind gesperrt. Die Funktion ist standardmäßig aus (`SignatureStore.termuxEnabled`).
+- Die Tastatur greift nie direkt auf Termux-Dateien oder Shared Storage zu (keine
+  Speicher-Berechtigung); alles läuft über Befehle in Termux.
+
 ### Textextraktion
 - `DocumentReader` ist **bewusst frei von Android-Code**, damit die JVM-Tests ohne Gerät laufen.
   Android-Abhängiges wird injiziert: `PdfEngine` (`PdfText`, PDFBox-Android), `OcrEngine`
@@ -92,7 +108,11 @@ Robolectric lädt beim ersten Lauf das Android-Image (~150 MB) aus Maven Central
   `lastToast`/`lastSummary`; Tastatur-Tests setzen `mStartedInputConnection`/`mInputEditorInfo`
   per Reflection und nutzen eine Proxy-`InputConnection`. Braucht `--add-opens java.base/java.io`
   (in `build.gradle.kts` gesetzt).
-- Nicht automatisch testbar: Tesseract zur Laufzeit (native Bibliothek) und echtes Verhalten
-  fremder Apps bei `commitContent`/Teilen.
+- Termux: `TermuxLogicTest` führt das echte `SETUP_SCRIPT` mit bash in einem Temp-Home aus und
+  ruft die Beispielaktionen und Kürzel auf (wird ohne bash übersprungen). `TermuxAndroidTest`
+  ersetzt Termux über `KeyboardService.testTermux` und simuliert das Eingabefeld mit einer
+  Proxy-`InputConnection` (Text, Cursor, Markierung).
+- Nicht automatisch testbar: Tesseract zur Laufzeit (native Bibliothek), echtes Verhalten
+  fremder Apps bei `commitContent`/Teilen und das Zusammenspiel mit einem echten Termux.
 - Achtung in Kotlin-Testquellen: `\uXXXX` wird auch in Rohstrings (`"""..."""`) als Unicode-Escape
-  übersetzt. Für RTF-Steuerwörter wie `荤` einen Platzhalter ersetzen (siehe `MoreFormatsTest.rtf`).
+  übersetzt. Für RTF-Steuerwörter wie `\u8364` einen Platzhalter ersetzen (siehe `MoreFormatsTest.rtf`).

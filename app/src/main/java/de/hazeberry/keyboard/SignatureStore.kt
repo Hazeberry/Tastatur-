@@ -51,6 +51,27 @@ class SignatureStore(context: Context) {
             prefs.edit().putBoolean(K_FILE_HEADER, value).apply()
         }
 
+    /** Termux-Anbindung (Taste ▶ und Kürzel). Aus, bis der Nutzer sie einschaltet. */
+    var termuxEnabled: Boolean
+        get() = prefs.getBoolean(K_TERMUX, false)
+        set(value) {
+            prefs.edit().putBoolean(K_TERMUX, value).apply()
+        }
+
+    /** Name der Aktion in ~/.tastatur/aktionen, die beim Tippen auf ▶ läuft. */
+    var termuxAction: String
+        get() = prefs.getString(K_TERMUX_ACTION, "standard") ?: "standard"
+        set(value) {
+            prefs.edit().putString(K_TERMUX_ACTION, value).apply()
+        }
+
+    /** Kürzel wie ";;datum" nach der Leertaste an Termux geben. */
+    var termuxTriggers: Boolean
+        get() = prefs.getBoolean(K_TERMUX_TRIGGERS, true)
+        set(value) {
+            prefs.edit().putBoolean(K_TERMUX_TRIGGERS, value).apply()
+        }
+
     /** Wer die Signatur per Tasker ändern will, muss dieses Token mitschicken. Leer = gesperrt. */
     var taskerToken: String
         get() = prefs.getString(K_TOKEN, "") ?: ""
@@ -119,6 +140,9 @@ class SignatureStore(context: Context) {
         const val K_HAPTICS = "haptics"
         const val K_TOKEN = "tasker_token"
         const val K_FILE_HEADER = "file_header"
+        const val K_TERMUX = "termux_enabled"
+        const val K_TERMUX_ACTION = "termux_action"
+        const val K_TERMUX_TRIGGERS = "termux_triggers"
         const val K_COUNT = "count"
         const val K_PENDING = "pending"
         const val K_LAST = "last_inserted_at"

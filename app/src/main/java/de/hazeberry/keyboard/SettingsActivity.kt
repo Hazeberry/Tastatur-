@@ -29,6 +29,10 @@ private const val EXAMPLE_SIGNATURE =
 
 class SettingsActivity : Activity() {
 
+    private companion object {
+        const val REQUEST_TERMUX = 7
+    }
+
     private lateinit var store: SignatureStore
     private lateinit var systemStatus: TextView
     private lateinit var counterStatus: TextView
@@ -38,6 +42,10 @@ class SettingsActivity : Activity() {
     private lateinit var minutesField: EditText
     private lateinit var hapticsSwitch: Switch
     private lateinit var fileHeaderSwitch: Switch
+    private lateinit var termuxSwitch: Switch
+    private lateinit var termuxTriggerSwitch: Switch
+    private lateinit var termuxActionField: EditText
+    private lateinit var termuxStatus: TextView
     private lateinit var tokenField: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,6 +73,10 @@ class SettingsActivity : Activity() {
         enabledSwitch = Switch(this).apply { text = "Signatur automatisch einfügen" }
         hapticsSwitch = Switch(this).apply { text = "Vibration beim Tippen" }
         fileHeaderSwitch = Switch(this).apply { text = "Dateinamen über den Inhalt setzen" }
+        termuxSwitch = Switch(this).apply { text = "Termux-Anbindung (Taste ▶)" }
+        termuxTriggerSwitch = Switch(this).apply { text = "Kürzel wie ;;datum (nach der Leertaste)" }
+        termuxActionField = input("Standard-Aktion beim Tippen auf ▶ (z. B. standard)")
+        termuxStatus = TextView(this).apply { textSize = 15f }
         signatureField = input("Signatur (Ziel, Regeln, Stand)", multiline = true)
         messagesField = input("Nach wie vielen Nachrichten (0 = aus)", numeric = true)
         minutesField = input("Nach wie vielen Minuten (0 = aus)", numeric = true)
@@ -127,6 +139,38 @@ class SettingsActivity : Activity() {
             )
         )
         page.addView(fileHeaderSwitch)
+
+        page.addView(heading("Termux"))
+        page.addView(
+            note(
+                "Mit Termux kann die Tastatur eigene Skripte ausführen: Tippen auf ▶ schickt den " +
+                    "markierten Text (oder das ganze Feld) an die Standard-Aktion und setzt das Ergebnis " +
+                    "ein. Lange drücken zeigt alle Aktionen. Kürzel wie ;;datum werden nach der Leertaste " +
+                    "ersetzt.\n\n" +
+                    "Die Skripte liegen in Termux unter ~/.tastatur/ (Text über stdin, Ergebnis über " +
+                    "stdout). Die Tastatur selbst liest keine Dateien und hat kein Internet; was ein " +
+                    "Skript tut, bestimmst du.\n\n" +
+                    "Einrichten: 1. Termux von F-Droid oder GitHub installieren. 2. Einrichtungsskript " +
+                    "kopieren, in Termux einfügen, Enter. 3. Berechtigung erteilen. 4. Verbindung testen."
+            )
+        )
+        page.addView(termuxStatus)
+        page.addView(termuxSwitch)
+        page.addView(termuxTriggerSwitch)
+        page.addView(termuxActionField)
+        page.addView(button("Einrichtungsskript kopieren") {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Termux-Einrichtung", TermuxLogic.SETUP_SCRIPT))
+            Toast.makeText(this, "Kopiert. In Termux einfügen und Enter drücken.", Toast.LENGTH_LONG).show()
+        })
+        page.addView(button("Berechtigung für Termux erteilen") {
+            if (!TermuxClient.isInstalled(this)) {
+                Toast.makeText(this, "Termux ist nicht installiert.", Toast.LENGTH_LONG).show()
+            } else {
+                requestPermissions(arrayOf(TermuxClient.PERMISSION), REQUEST_TERMUX)
+            }
+        })
+        page.addView(button("Verbindung testen") { testTermux() })
 
         page.addView(heading("Tasker"))
         page.addView(
@@ -203,6 +247,9 @@ class SettingsActivity : Activity() {
         enabledSwitch.isChecked = store.enabled
         hapticsSwitch.isChecked = store.haptics
         fileHeaderSwitch.isChecked = store.fileHeader
+        termuxSwitch.isChecked = store.termuxEnabled
+        termuxTriggerSwitch.isChecked = store.termuxTriggers
+        termuxActionField.setText(store.termuxAction)
         signatureField.setText(store.signature)
         messagesField.setText(store.messageInterval.toString())
         minutesField.setText(store.minuteInterval.toString())
@@ -213,10 +260,34 @@ class SettingsActivity : Activity() {
         store.enabled = enabledSwitch.isChecked
         store.haptics = hapticsSwitch.isChecked
         store.fileHeader = fileHeaderSwitch.isChecked
+        store.termuxEnabled = termuxSwitch.isChecked
+        store.termuxTriggers = termuxTriggerSwitch.isChecked
+        store.termuxAction = termuxActionField.text.toString().trim().ifEmpty { "standard" }
         store.signature = signatureField.text.toString().trim()
         store.messageInterval = messagesField.text.toString().toIntOrNull() ?: 0
         store.minuteInterval = minutesField.text.toString().toIntOrNull() ?: 0
         store.taskerToken = tokenField.text.toString().trim()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        refreshStatus()
+    }
+
+    private fun testTermux() {
+        saveValues()
+        Toast.makeText(this, "Frage Termux …", Toast.LENGTH_SHORT).show()
+        TermuxClient(this).run("Verbindungstest", TermuxLogic.testCommand(), null) { result ->
+            val message = if (result.success) {
+                val count = result.stdout.lines().getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+                "Verbindung klappt. $count Aktion(en) in ~/.tastatur/aktionen."
+            } else {
+                TermuxLogic.describeFailure(result)
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            refreshStatus()
+        }
     }
 
     private fun inputMethodManager(): InputMethodManager =
@@ -236,6 +307,11 @@ class SettingsActivity : Activity() {
             !isEnabledInSystem() -> "Die Tastatur ist noch nicht aktiviert."
             !isSelected() -> "Aktiviert, aber nicht ausgewählt. Wähle sie beim Tippen über das Tastatursymbol."
             else -> "Die Tastatur ist aktiviert und ausgewählt."
+        }
+        termuxStatus.text = when {
+            !TermuxClient.isInstalled(this) -> "Termux: nicht installiert."
+            !TermuxClient.hasPermission(this) -> "Termux: installiert, Berechtigung fehlt noch."
+            else -> "Termux: installiert, Berechtigung erteilt."
         }
         counterStatus.text =
             "Gezählt seit der letzten Signatur: ${store.count}\n" +

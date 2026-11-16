@@ -1,7 +1,9 @@
 package de.hazeberry.keyboard
 
 import android.annotation.SuppressLint
+import android.content.ClipData
 import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -17,6 +19,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
 import android.view.inputmethod.InputMethodManager
@@ -24,7 +27,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
-private enum class Page { LETTERS, SYMBOLS, SYMBOLS2, EMOJI }
+private enum class Page { LETTERS, SYMBOLS, SYMBOLS2, EMOJI, TERMUX }
 private enum class Shift { OFF, ONCE, LOCK }
 private enum class Kind { LETTER, SPECIAL, ACCENT }
 
@@ -46,6 +49,12 @@ private val EMOJIS = listOf(
 
 class KeyboardService : InputMethodService() {
 
+    companion object {
+        /** Nur für Tests: Termux-Aufrufe abfangen. */
+        @Volatile
+        internal var testTermux: TermuxRunner? = null
+    }
+
     private lateinit var store: SignatureStore
     private lateinit var palette: Palette
 
@@ -60,6 +69,23 @@ class KeyboardService : InputMethodService() {
 
     /** Hatte das Eingabefeld zuletzt Text? Der Wechsel auf "leer" gilt als gesendete Nachricht. */
     private var fieldHadText = false
+
+    // ------------------------------------------------------------------ Termux-Zustand
+    private val termux: TermuxRunner by lazy { testTermux ?: TermuxClient(this) }
+
+    /** Was die Tastatur zuletzt selbst getippt hat (für Kürzel; nie Text, den die App vorgibt). */
+    private val typedBuffer = StringBuilder()
+
+    /** Laufende Termux-Aufrufe und der Name des letzten, für die Statuszeile. */
+    private var termuxJobs = 0
+    private var termuxLabel: String? = null
+
+    /** Aktionsliste aus Termux (null = wird geladen) bzw. Fehlermeldung dazu. */
+    private var termuxActions: List<String>? = null
+    private var termuxActionsError: String? = null
+
+    /** Ob die Leiste mit Termux-Taste gebaut wurde (Einstellung kann sich ändern). */
+    private var barHasTermux = false
 
     override fun onCreate() {
         super.onCreate()
@@ -97,9 +123,15 @@ class KeyboardService : InputMethodService() {
             gravity = Gravity.CENTER_VERTICAL
         }
         bar.addView(status, LinearLayout.LayoutParams(0, dp(36), 1f))
-        bar.addView(smallKey("📁") { openFilePicker() })
-        bar.addView(smallKey("Sig") { insertSignatureManually() })
-        bar.addView(smallKey("🌐") { showKeyboardPicker() })
+        barHasTermux = store.termuxEnabled
+        val width = if (barHasTermux) 46 else 52
+        if (barHasTermux) {
+            // Tippen: Standard-Aktion. Lange drücken: Liste aller Aktionen.
+            bar.addView(smallKey("▶", width, onLongPress = { showTermuxPage() }) { runDefaultAction() })
+        }
+        bar.addView(smallKey("📁", width) { openFilePicker() })
+        bar.addView(smallKey("Sig", width) { insertSignatureManually() })
+        bar.addView(smallKey("🌐", width) { showKeyboardPicker() })
 
         val keys = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         container.addView(bar)
@@ -161,6 +193,8 @@ class KeyboardService : InputMethodService() {
                 keys.addView(bottomRow("ABC") { setPage(Page.LETTERS) })
             }
 
+            Page.TERMUX -> renderTermuxPage(keys)
+
             Page.EMOJI -> {
                 EMOJIS.chunked(10).forEach { chunk ->
                     keys.addView(row(chunk.map { e -> key(e, 1f, Kind.LETTER) { type(e) } }))
@@ -199,8 +233,9 @@ class KeyboardService : InputMethodService() {
         weight: Float = 1f,
         kind: Kind = Kind.LETTER,
         repeat: Boolean = false,
+        onLongPress: (() -> Unit)? = null,
         onTap: () -> Unit
-    ): KeyView = KeyView(label, weight, kind, repeat, onTap)
+    ): KeyView = KeyView(label, weight, kind, repeat, onLongPress, onTap)
 
     private fun charKey(s: String): KeyView = key(s, 1f, Kind.LETTER) { onChar(s) }
 
@@ -211,10 +246,15 @@ class KeyboardService : InputMethodService() {
         return k
     }
 
-    private fun smallKey(label: String, onTap: () -> Unit): KeyView {
-        val k = key(label, 1f, Kind.SPECIAL, onTap = onTap)
+    private fun smallKey(
+        label: String,
+        widthDp: Int = 52,
+        onLongPress: (() -> Unit)? = null,
+        onTap: () -> Unit
+    ): KeyView {
+        val k = key(label, 1f, Kind.SPECIAL, onLongPress = onLongPress, onTap = onTap)
         k.textSize = 14f
-        k.layoutParams = LinearLayout.LayoutParams(dp(52), dp(32)).apply {
+        k.layoutParams = LinearLayout.LayoutParams(dp(widthDp), dp(32)).apply {
             setMargins(dp(2), dp(2), dp(2), dp(2))
         }
         return k
@@ -242,8 +282,16 @@ class KeyboardService : InputMethodService() {
         weight: Float,
         private val kind: Kind,
         private val repeat: Boolean,
+        private val onLongPress: (() -> Unit)?,
         private val onTap: () -> Unit
     ) : TextView(this@KeyboardService) {
+
+        private var longPressed = false
+        private val longPress = Runnable {
+            longPressed = true
+            if (store.haptics) performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            onLongPress?.invoke()
+        }
 
         var letter: Char? = null
 
@@ -271,12 +319,27 @@ class KeyboardService : InputMethodService() {
                 MotionEvent.ACTION_DOWN -> {
                     v.isPressed = true
                     if (store.haptics) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onTap()
-                    if (repeat) this@KeyView.postDelayed(repeater, 380)
+                    if (onLongPress != null) {
+                        // Mit Langdruck: erst beim Loslassen entscheiden, was gemeint war.
+                        longPressed = false
+                        this@KeyView.postDelayed(longPress, 450)
+                    } else {
+                        onTap()
+                        if (repeat) this@KeyView.postDelayed(repeater, 380)
+                    }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
                     v.isPressed = false
                     this@KeyView.removeCallbacks(repeater)
+                    if (onLongPress != null) {
+                        this@KeyView.removeCallbacks(longPress)
+                        if (!longPressed) onTap()
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    v.isPressed = false
+                    this@KeyView.removeCallbacks(repeater)
+                    this@KeyView.removeCallbacks(longPress)
                 }
             }
             return true
@@ -284,6 +347,7 @@ class KeyboardService : InputMethodService() {
 
         override fun onDetachedFromWindow() {
             removeCallbacks(repeater)
+            removeCallbacks(longPress)
             super.onDetachedFromWindow()
         }
     }
@@ -384,6 +448,8 @@ class KeyboardService : InputMethodService() {
         }
         ic.commitText(text, 1)
         fieldHadText = true
+        typedBuffer.append(text)
+        if (typedBuffer.length > 80) typedBuffer.delete(0, typedBuffer.length - 80)
     }
 
     private fun onLetter(c: Char) {
@@ -391,13 +457,17 @@ class KeyboardService : InputMethodService() {
         if (shift == Shift.ONCE) setShift(Shift.OFF)
     }
 
-    private fun onChar(s: String) {
+    internal fun onChar(s: String) {
+        // Kürzel wie ";;datum": vor dem Leerzeichen prüfen, danach normal weitertippen.
+        val trigger = if (s == " ") pendingTrigger() else null
         type(s)
         updateAutoCap()
+        trigger?.let { runTrigger(it) }
     }
 
     private fun backspace() {
         val ic = currentInputConnection ?: return
+        if (typedBuffer.isNotEmpty()) typedBuffer.setLength(typedBuffer.length - 1)
         if (ic.getSelectedText(0).isNullOrEmpty()) {
             ic.deleteSurroundingText(1, 0)
         } else {
@@ -490,9 +560,200 @@ class KeyboardService : InputMethodService() {
         imm.showInputMethodPicker()
     }
 
+    // ------------------------------------------------------------------ Termux
+
+    /** Tippen auf ▶: die Standard-Aktion aus den Einstellungen. */
+    private fun runDefaultAction() {
+        val name = store.termuxAction.trim()
+        if (!TermuxLogic.isValidActionName(name)) {
+            toast("Ungültiger Name der Standard-Aktion. Bitte in den Einstellungen prüfen.")
+            return
+        }
+        runAction(name)
+    }
+
+    /** Lange auf ▶ drücken: Aktionen aus Termux laden und als Tastenseite zeigen. */
+    private fun showTermuxPage() {
+        termuxActions = null
+        termuxActionsError = null
+        setPage(Page.TERMUX)
+        startTermux("Aktionen laden", TermuxLogic.listCommand(), null) { result ->
+            if (result.success) {
+                termuxActions = TermuxLogic.parseActionList(result.stdout)
+                if (termuxActions!!.isEmpty()) {
+                    termuxActionsError = "Keine Aktionen in ~/.tastatur/aktionen. Einrichtungsskript in den Einstellungen."
+                }
+            } else {
+                termuxActions = emptyList()
+                termuxActionsError = TermuxLogic.describeFailure(result)
+            }
+            if (page == Page.TERMUX) render()
+        }
+    }
+
+    private fun renderTermuxPage(keys: LinearLayout) {
+        val actions = termuxActions
+        val message = when {
+            actions == null -> "Lade Aktionen aus Termux …"
+            termuxActionsError != null -> termuxActionsError
+            else -> null
+        }
+        if (message != null) {
+            keys.addView(TextView(this).apply {
+                text = message
+                setTextColor(palette.hint)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(16), dp(12), dp(16))
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4 * 54)))
+        } else {
+            // Bis zu 12 Aktionen sichtbar, drei je Zeile.
+            actions!!.take(12).chunked(3).forEach { chunk ->
+                val views = chunk.map { name ->
+                    key(name, 1f, Kind.SPECIAL) {
+                        setPage(Page.LETTERS)
+                        runAction(name)
+                    }.apply { textSize = 14f; maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+                }
+                keys.addView(row(views + List(3 - views.size) { spacer() }))
+            }
+        }
+        keys.addView(
+            row(
+                listOf(
+                    key("ABC", 2f, Kind.SPECIAL) { setPage(Page.LETTERS) },
+                    key("↻", 1f, Kind.SPECIAL) { showTermuxPage() }
+                )
+            )
+        )
+    }
+
+    private fun spacer(): View = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
+    }
+
+    /**
+     * Führt eine Aktion aus: auf der Markierung, sonst auf dem ganzen Feld. Bei leerem Feld
+     * bekommt das Skript keinen Text, und seine Ausgabe wird eingefügt.
+     */
+    internal fun runAction(name: String) {
+        val ic = currentInputConnection ?: return
+        if (isSensitiveField()) {
+            toast("Termux-Aktionen sind in Passwortfeldern gesperrt.")
+            return
+        }
+        val selected = ic.getSelectedText(0)?.toString()
+        val (mode, input) = if (!selected.isNullOrEmpty()) {
+            TermuxMode.SELECTION to selected
+        } else {
+            TermuxMode.FIELD to (fullFieldText() ?: return)
+        }
+        if (input.length > TermuxLogic.MAX_INPUT) {
+            toast("Zu viel Text für Termux (höchstens ${TermuxLogic.MAX_INPUT / 1000}.000 Zeichen).")
+            return
+        }
+        val target = targetFor(mode, input)
+        startTermux(name, TermuxLogic.actionCommand(name), input) { applyTermuxResult(target, it) }
+    }
+
+    /** Kürzel vor dem Cursor, das der Nutzer gerade selbst getippt hat, oder null. */
+    private fun pendingTrigger(): String? {
+        if (!store.termuxEnabled || !store.termuxTriggers || isSensitiveField()) return null
+        val before = currentInputConnection?.getTextBeforeCursor(48, 0) ?: return null
+        return TermuxLogic.findTrigger(before, typedBuffer)
+    }
+
+    private fun runTrigger(token: String) {
+        // Erwartet vor dem Cursor: das Kürzel und das eben getippte Leerzeichen.
+        val target = targetFor(TermuxMode.TRIGGER, ";;$token ")
+        startTermux(";;$token", TermuxLogic.triggerCommand(token), null) { applyTermuxResult(target, it) }
+    }
+
+    private fun targetFor(mode: TermuxMode, original: String) = TermuxTarget(
+        currentInputEditorInfo?.packageName, currentInputEditorInfo?.fieldId ?: 0, mode, original
+    )
+
+    private fun startTermux(label: String, args: List<String>, stdin: String?, done: (TermuxResult) -> Unit) {
+        termuxJobs++
+        termuxLabel = label
+        refreshStatus()
+        termux.run(label, args, stdin) { result ->
+            termuxJobs = (termuxJobs - 1).coerceAtLeast(0)
+            refreshStatus()
+            done(result)
+        }
+    }
+
+    /** Setzt das Ergebnis nur ein, wenn sich App, Feld und Text seit dem Start nicht geändert haben. */
+    private fun applyTermuxResult(target: TermuxTarget, result: TermuxResult) {
+        if (!result.success) {
+            toast(TermuxLogic.describeFailure(result))
+            return
+        }
+        val text = TermuxLogic.normalizeOutput(result.stdout)
+        if (text.isBlank() && target.mode != TermuxMode.TRIGGER && target.original.isNotBlank()) {
+            toast("Das Skript hat nichts ausgegeben. Der Text bleibt unverändert.")
+            return
+        }
+        if (result.stdoutTruncated) toast("Ausgabe gekürzt (Termux liefert höchstens 100 KB).")
+
+        val ic = currentInputConnection
+        val info = currentInputEditorInfo
+        val current = when (target.mode) {
+            TermuxMode.SELECTION -> ic?.getSelectedText(0)?.toString()
+            TermuxMode.FIELD -> fullFieldText()
+            TermuxMode.TRIGGER -> ic?.getTextBeforeCursor(target.original.length, 0)?.toString()
+        }
+        if (ic == null || isSensitiveField() ||
+            !TermuxLogic.canApply(target, info?.packageName, info?.fieldId ?: 0, current)
+        ) {
+            copyToClipboard(text)
+            toast("Der Text hat sich inzwischen geändert. Das Ergebnis liegt in der Zwischenablage.")
+            return
+        }
+        ic.beginBatchEdit()
+        when (target.mode) {
+            TermuxMode.SELECTION -> ic.commitText(text, 1)
+            TermuxMode.FIELD -> if (target.original.isEmpty()) {
+                type(text)
+            } else {
+                ic.setSelection(0, target.original.length)
+                ic.commitText(text, 1)
+            }
+            TermuxMode.TRIGGER -> {
+                ic.deleteSurroundingText(target.original.length, 0)
+                ic.commitText("$text ", 1)
+            }
+        }
+        ic.endBatchEdit()
+        fieldHadText = !isFieldEmpty()
+        updateAutoCap()
+    }
+
+    /** Ganzer Text des Felds (oder null, wenn die App ihn nicht herausgibt). */
+    private fun fullFieldText(): String? {
+        val ic = currentInputConnection ?: return null
+        val request = ExtractedTextRequest().apply { hintMaxChars = TermuxLogic.MAX_INPUT + 1 }
+        ic.getExtractedText(request, 0)?.text?.let { return it.toString() }
+        val before = ic.getTextBeforeCursor(TermuxLogic.MAX_INPUT + 1, 0) ?: return null
+        val selected = ic.getSelectedText(0) ?: ""
+        val after = ic.getTextAfterCursor(TermuxLogic.MAX_INPUT + 1, 0) ?: ""
+        return "$before$selected$after"
+    }
+
+    private fun copyToClipboard(text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Termux", text))
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
     // ------------------------------------------------------------------ Status
 
     private fun statusText(): String = when {
+        termuxJobs > 0 -> "⏳ Termux: ${termuxLabel ?: "läuft"} …"
         FileBridge.hasPending() -> "📁 Datei wartet auf ein Eingabefeld in der App"
         !store.enabled || store.signature.isBlank() -> "Signatur aus"
         store.isDue() -> "Signatur fällig: kommt vor die nächste Nachricht"
@@ -508,6 +769,8 @@ class KeyboardService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // Termux-Taste ein- oder ausgeschaltet: Leiste neu aufbauen.
+        if (store.termuxEnabled != barHasTermux) setInputView(onCreateInputView())
         fieldHadText = !isFieldEmpty()
         if (!restarting) {
             val cls = (info?.inputType ?: 0) and InputType.TYPE_MASK_CLASS
@@ -524,6 +787,7 @@ class KeyboardService : InputMethodService() {
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        typedBuffer.setLength(0)
         insertPendingFile(attribute)
     }
 
@@ -542,6 +806,8 @@ class KeyboardService : InputMethodService() {
         super.onUpdateSelection(
             oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd
         )
+        // Markiert oder Cursor deutlich zurückgesetzt: getippte Folge gilt nicht mehr für Kürzel.
+        if (newSelStart != newSelEnd || oldSelStart - newSelStart > 2) typedBuffer.setLength(0)
         val empty = isFieldEmpty()
         if (!isSensitiveField() && empty && fieldHadText) {
             store.registerMessageSent()
