@@ -21,6 +21,8 @@ Excel, Bilder, ZIP ...) direkt in den Chat einfügen oder Dateien anhängen.
   **RTF**, **E-Books**, **Outlook-Mails**, **Google Docs**, **Bilder** (Texterkennung) und
   **Archive** (ZIP, 7z, tar.gz ...), auch mehrere auf einmal. Wo die App es zulässt, auch als
   **Anhang**
+- Taste **▶** (optional): eigene **Termux-Skripte** auf den markierten Text oder das ganze Feld
+  anwenden, Kürzel wie `;;datum` ersetzen lassen
 - Passwortfelder werden nie gezählt und nie mit einer Signatur versehen
 - Hell/Dunkel folgt dem System
 
@@ -138,6 +140,61 @@ gibst, darf genau diese Datei lesen, sonst niemand. Die Kopien werden nach einem
 - Die APK ist rund 17 MB groß. Den größten Teil macht die Texterkennung aus (Programm und
   Sprachdaten, rund 9 MB), dann die PDF-Unterstützung.
 
+## Termux (Taste ▶)
+
+Mit [Termux](https://termux.dev) kann die Tastatur eigene Skripte ausführen. Die Tastatur
+selbst bleibt ohne Internet und liest keine Dateien; sie bittet Termux über dessen offizielle
+Schnittstelle (`RUN_COMMAND`), ein Skript zu starten, und setzt die Ausgabe ein.
+
+**Einrichten**
+
+1. Termux von **F-Droid oder GitHub** installieren (die Google-Play-Fassung ist eingeschränkt).
+2. In den Einstellungen der Tastatur **Termux-Anbindung** einschalten,
+   **Einrichtungsskript kopieren**, in Termux einfügen, Enter. Das Skript legt `~/.tastatur/` mit
+   Beispielen an und setzt `allow-external-apps = true` (ohne das nimmt Termux keine Befehle von
+   anderen Apps an). Eigene Skripte überschreibt es nie.
+3. **Berechtigung für Termux erteilen** (Android fragt nach).
+4. **Verbindung testen.**
+
+**Benutzen**
+
+- **Tippen auf ▶:** Die Standard-Aktion (Einstellungen, vorgegeben `standard`) bekommt den
+  markierten Text, ohne Markierung das ganze Feld. Ihre Ausgabe ersetzt diesen Text. Bei leerem
+  Feld wird die Ausgabe eingefügt (z. B. für Vorlagen).
+- **Lange auf ▶ drücken:** Liste aller Aktionen als Tasten, eine antippen.
+- **Kürzel:** `;;name` tippen, dann Leertaste. Das Kürzel wird durch die Ausgabe von
+  `~/.tastatur/kuerzel name` ersetzt. Beispiele: `;;datum`, `;;zeit`, `;;iso`, `;;=23*7`.
+- Während Termux arbeitet, zeigt die Statuszeile "⏳ Termux: …". Fehler kommen als Meldung.
+
+**Skript-Konvention**
+
+| Datei | Bekommt | Liefert |
+| --- | --- | --- |
+| `~/.tastatur/aktionen/<name>` | Text über **stdin** | Ergebnis über **stdout**, Exit-Code 0 = Erfolg |
+| `~/.tastatur/kuerzel` | das Kürzel ohne `;;` als **erstes Argument** | Ersatztext über **stdout** |
+
+Die Skripte laufen mit `bash`, müssen also nicht ausführbar sein. Ein abschließender
+Zeilenumbruch der Ausgabe fällt weg. Was ein Skript tut, bestimmst du: übersetzen, eine KI-API
+mit `curl` fragen, Text per `termux-clipboard-set` (Termux:API) in die Zwischenablage legen,
+mehrere Schritte verketten, Aufträge in eine Warteschlange schreiben ... Bearbeiten lassen sich
+die Skripte in Termux (`nano`) oder mit jedem Editor über den Dateidialog (Speicherort "Termux").
+
+**Schutzregeln**
+
+- Aus, bis du es einschaltest. In Passwortfeldern läuft nie etwas.
+- Ausgeführt werden nur Dateien aus `~/.tastatur/`, deren Namen die Tastatur prüft. Getippter
+  Text wird nie zu einem Befehl, er geht nur als stdin bzw. als Kürzel-Argument an dein Skript.
+- Kürzel lösen nur aus, wenn du sie gerade selbst getippt hast, nicht durch Text, den eine App
+  vorgibt. Das Beispiel-Rechenkürzel nimmt nur Zahlen und Rechenzeichen an.
+- Das Ergebnis wird nur eingesetzt, wenn App, Feld und Text noch genau so sind wie beim Start.
+  Hast du inzwischen weitergetippt, landet es in der **Zwischenablage**.
+- Gibt ein Skript nichts aus, bleibt dein Text unverändert (nie versehentlich gelöscht).
+- Höchstens 100.000 Zeichen gehen an Termux; Termux liefert höchstens 100 KB zurück.
+
+**Wichtig:** Die Tastatur selbst hat keine Internet-Berechtigung, Termux schon. Ruft ein Skript
+einen Online-Dienst auf (z. B. eine KI-API), verlässt der Text das Handy. API-Schlüssel gehören
+dann in Termux (z. B. `~/.tastatur/schluessel`, `chmod 600`), nie in die Tastatur.
+
 ## Tasker
 
 Aktion **Intent senden**, Ziel **Broadcast-Empfänger**, Paket `de.hazeberry.keyboard`.
@@ -182,6 +239,8 @@ app/src/main/java/de/hazeberry/keyboard/
   TesseractOcr.kt       Texterkennung für Bilder und eingescannte PDF-Seiten
   AttachmentProvider.kt Dateien für Anhänge bereitstellen
   FileBridge.kt         Übergabe von Text und Anhängen an die Tastatur
+  TermuxClient.kt       Termux-Befehle starten (RUN_COMMAND), Ergebnis empfangen
+  TermuxLogic.kt        Regeln der Termux-Anbindung, Einrichtungsskript
 app/src/main/assets/tessdata/  Sprachdaten Deutsch/Englisch (tessdata_fast, Apache-2.0)
 app/src/test/           Tests (gradle testDebugUnitTest): alle Formate mit echten
                         Beispieldateien, dazu Robolectric-Tests für Dialoge, Anhänge und Tastatur
