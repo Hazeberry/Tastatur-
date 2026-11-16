@@ -37,6 +37,7 @@ class SettingsActivity : Activity() {
     private lateinit var messagesField: EditText
     private lateinit var minutesField: EditText
     private lateinit var hapticsSwitch: Switch
+    private lateinit var fileHeaderSwitch: Switch
     private lateinit var tokenField: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +64,7 @@ class SettingsActivity : Activity() {
         counterStatus = TextView(this).apply { textSize = 15f }
         enabledSwitch = Switch(this).apply { text = "Signatur automatisch einfügen" }
         hapticsSwitch = Switch(this).apply { text = "Vibration beim Tippen" }
+        fileHeaderSwitch = Switch(this).apply { text = "Dateinamen über den Inhalt setzen" }
         signatureField = input("Signatur (Ziel, Regeln, Stand)", multiline = true)
         messagesField = input("Nach wie vielen Nachrichten (0 = aus)", numeric = true)
         minutesField = input("Nach wie vielen Minuten (0 = aus)", numeric = true)
@@ -109,6 +111,18 @@ class SettingsActivity : Activity() {
 
         page.addView(heading("Tastatur ausprobieren"))
         page.addView(input("Hier tippen", multiline = true))
+
+        page.addView(heading("Dateien (Taste 📁)"))
+        page.addView(
+            note(
+                "Fügt den Text von Dateien ein: Textdateien, PDF, Word (.docx), Excel (.xlsx), " +
+                    "PowerPoint (.pptx), LibreOffice (.odt/.ods/.odp), Google Docs aus Drive " +
+                    "und ZIP-Archive. Mehrere Dateien auf einmal gehen auch. Höchstens " +
+                    "${FilePickerActivity.MAX_CHARS / 1000}.000 Zeichen.\n\n" +
+                    "Ohne Speicher-Berechtigung: Die App sieht nur die Dateien, die du antippst."
+            )
+        )
+        page.addView(fileHeaderSwitch)
 
         page.addView(heading("Tasker"))
         page.addView(
@@ -184,6 +198,7 @@ class SettingsActivity : Activity() {
     private fun loadValues() {
         enabledSwitch.isChecked = store.enabled
         hapticsSwitch.isChecked = store.haptics
+        fileHeaderSwitch.isChecked = store.fileHeader
         signatureField.setText(store.signature)
         messagesField.setText(store.messageInterval.toString())
         minutesField.setText(store.minuteInterval.toString())
@@ -193,6 +208,7 @@ class SettingsActivity : Activity() {
     private fun saveValues() {
         store.enabled = enabledSwitch.isChecked
         store.haptics = hapticsSwitch.isChecked
+        store.fileHeader = fileHeaderSwitch.isChecked
         store.signature = signatureField.text.toString().trim()
         store.messageInterval = messagesField.text.toString().toIntOrNull() ?: 0
         store.minuteInterval = minutesField.text.toString().toIntOrNull() ?: 0

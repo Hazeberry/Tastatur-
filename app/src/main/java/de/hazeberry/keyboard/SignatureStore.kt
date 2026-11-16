@@ -44,6 +44,13 @@ class SignatureStore(context: Context) {
             prefs.edit().putBoolean(K_HAPTICS, value).apply()
         }
 
+    /** Beim Einfügen einer einzelnen Datei "[Datei: name]" darüber setzen. Bei mehreren immer. */
+    var fileHeader: Boolean
+        get() = prefs.getBoolean(K_FILE_HEADER, true)
+        set(value) {
+            prefs.edit().putBoolean(K_FILE_HEADER, value).apply()
+        }
+
     /** Wer die Signatur per Tasker ändern will, muss dieses Token mitschicken. Leer = gesperrt. */
     var taskerToken: String
         get() = prefs.getString(K_TOKEN, "") ?: ""
@@ -111,6 +118,7 @@ class SignatureStore(context: Context) {
         const val K_MINUTES = "minute_interval"
         const val K_HAPTICS = "haptics"
         const val K_TOKEN = "tasker_token"
+        const val K_FILE_HEADER = "file_header"
         const val K_COUNT = "count"
         const val K_PENDING = "pending"
         const val K_LAST = "last_inserted_at"

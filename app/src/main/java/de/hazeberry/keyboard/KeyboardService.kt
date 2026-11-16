@@ -434,6 +434,8 @@ class KeyboardService : InputMethodService() {
     private fun openFilePicker() {
         val intent = Intent(this, FilePickerActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // Nur in diese App wird der Dateiinhalt später eingefügt.
+            .putExtra(FilePickerActivity.EXTRA_PACKAGE, currentInputEditorInfo?.packageName)
         try {
             startActivity(intent)
         } catch (e: Exception) {
@@ -442,15 +444,16 @@ class KeyboardService : InputMethodService() {
         }
     }
 
-    /** Tippt eine zuvor gewählte Datei ein, sobald die Tastatur wieder im Eingabefeld steht. */
-    private fun insertPendingFile() {
-        if (!FileBridge.hasPending() || currentInputConnection == null) return
-        if (isSensitiveField()) {
-            // Dateiinhalt gehört nie in ein Passwortfeld.
-            FileBridge.clear()
-            return
-        }
-        val text = FileBridge.take() ?: return
+    /**
+     * Tippt zuvor gewählte Dateien ein, sobald die App, aus der 📁 kam, wieder ein Eingabefeld
+     * hat. Das klappt auch, wenn die Tastatur dabei noch nicht sichtbar ist.
+     */
+    private fun insertPendingFile(info: EditorInfo?) {
+        if (!FileBridge.hasPending() || info == null || currentInputConnection == null) return
+        if (info.inputType == InputType.TYPE_NULL) return
+        // Dateiinhalt gehört nie in ein Passwortfeld. Er wartet, bis ein normales Feld kommt.
+        if (isSensitiveField()) return
+        val text = FileBridge.take(info.packageName) ?: return
         type(text)
         updateAutoCap()
     }
@@ -463,6 +466,7 @@ class KeyboardService : InputMethodService() {
     // ------------------------------------------------------------------ Status
 
     private fun statusText(): String = when {
+        FileBridge.hasPending() -> "📁 Datei wartet auf ein Eingabefeld in der App"
         !store.enabled || store.signature.isBlank() -> "Signatur aus"
         store.isDue() -> "Signatur fällig: kommt vor die nächste Nachricht"
         else -> store.messagesUntilDue()?.let { "Noch $it Nachricht(en) bis zur Signatur" }
@@ -488,8 +492,12 @@ class KeyboardService : InputMethodService() {
         }
         render()
         updateAutoCap()
-        insertPendingFile()
         refreshStatus()
+    }
+
+    override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
+        super.onStartInput(attribute, restarting)
+        insertPendingFile(attribute)
     }
 
     /**
