@@ -115,11 +115,15 @@ class SettingsActivity : Activity() {
         page.addView(heading("Dateien (Taste 📁)"))
         page.addView(
             note(
-                "Fügt den Text von Dateien ein: Textdateien, PDF, Word (.docx), Excel (.xlsx), " +
-                    "PowerPoint (.pptx), LibreOffice (.odt/.ods/.odp), Google Docs aus Drive " +
-                    "und ZIP-Archive. Mehrere Dateien auf einmal gehen auch. Höchstens " +
-                    "${FilePickerActivity.MAX_CHARS / 1000}.000 Zeichen.\n\n" +
-                    "Ohne Speicher-Berechtigung: Die App sieht nur die Dateien, die du antippst."
+                "Fügt den Text von Dateien ein: Textdateien, PDF (auch eingescannt, per " +
+                    "Texterkennung), Word, Excel und PowerPoint (neu und alt, auch mit Passwort), " +
+                    "LibreOffice, RTF, E-Books, Outlook-Mails, Google Docs aus Drive, Bilder " +
+                    "(Texterkennung) und Archive (ZIP, 7z, tar.gz …). Mehrere Dateien auf einmal " +
+                    "gehen auch. Höchstens ${FilePickerActivity.MAX_CHARS / 1000}.000 Zeichen.\n\n" +
+                    "Nimmt das Eingabefeld Dateien an, kannst du sie stattdessen anhängen oder " +
+                    "über „Teilen“ an die App senden.\n\n" +
+                    "Ohne Speicher-Berechtigung: Die App sieht nur die Dateien, die du antippst. " +
+                    "Alles passiert auf dem Handy."
             )
         )
         page.addView(fileHeaderSwitch)

@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        Nötig, um zu prüfen, ob die Chat-App Dateien über "Teilen" annimmt (Android 11+ zeigt
+        Apps sonst nicht). Gibt keinen Zugriff auf Daten anderer Apps.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND_MULTIPLE" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -27,6 +42,13 @@
             android:taskAffinity=""
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:theme="@style/PickerTheme" />
+
+        <!-- Anhänge: nur lesbar für Apps, denen die Tastatur es ausdrücklich erlaubt -->
+        <provider
+            android:name=".AttachmentProvider"
+            android:authorities="de.hazeberry.keyboard.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <!-- Die Tastatur -->
         <service

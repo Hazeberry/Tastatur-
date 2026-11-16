@@ -12,7 +12,7 @@ import org.junit.Test
 import java.io.File
 import java.nio.file.Files
 
-/** Prüft [PdfText.extract] ohne Android-Gerät: PDF erzeugen, dann Text herauslesen. */
+/** Prüft [PdfText] ohne Android-Gerät: PDF erzeugen, dann Text herauslesen. */
 class PdfBoxTest {
 
     private fun makePdf(file: File, pages: List<String>, userPassword: String? = null) {
@@ -37,7 +37,8 @@ class PdfBoxTest {
         }
     }
 
-    private fun extract(file: File, max: Int = 100_000): String = PdfText.extract(file, max)
+    private fun extract(file: File, max: Int = 100_000, password: String? = null): String =
+        PdfText.pages(file, password, max).texts.joinToString("")
 
     @Test
     fun extractsText() {
@@ -67,7 +68,40 @@ class PdfBoxTest {
         f.delete()
     }
 
-    @Test(expected = ReadProblem::class)
+    @Test
+    fun passwordProtectedWithPassword() {
+        val f = Files.createTempFile("pw", ".pdf").toFile()
+        makePdf(f, listOf("Nur mit Passwort"), userPassword = "1234")
+        try {
+            assertTrue(extract(f, password = "1234").contains("Nur mit Passwort"))
+            try {
+                extract(f, password = "0000")
+                throw AssertionError("falsches Passwort angenommen")
+            } catch (e: PasswordRequired) {
+                assertTrue(e.wrong)
+            }
+        } finally {
+            f.delete()
+        }
+    }
+
+    @Test
+    fun decryptedCopyForOcr() {
+        val f = Files.createTempFile("pw", ".pdf").toFile()
+        val out = Files.createTempFile("plain", ".pdf").toFile()
+        makePdf(f, listOf("Seite"), userPassword = "1234")
+        try {
+            assertTrue(PdfText.isEncrypted(f))
+            PdfText.decryptedCopy(f, "1234", out)
+            assertTrue(!PdfText.isEncrypted(out))
+            assertTrue(extract(out).contains("Seite"))
+        } finally {
+            f.delete()
+            out.delete()
+        }
+    }
+
+    @Test(expected = PasswordRequired::class)
     fun passwordProtectedThrows() {
         val f = Files.createTempFile("p", ".pdf").toFile()
         makePdf(f, listOf("geheim"), userPassword = "1234")

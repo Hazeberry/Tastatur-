@@ -23,7 +23,7 @@ class DocumentReaderTest {
     @Before
     fun setUp() {
         dir = Files.createTempDirectory("docreader").toFile()
-        reader = DocumentReader(dir) { _, _ -> pdfCalls++; "PDF-Inhalt" }
+        reader = DocumentReader(dir, fakePdf("PDF-Inhalt") { pdfCalls++ })
     }
 
     @After
@@ -32,6 +32,13 @@ class DocumentReaderTest {
     }
 
     // ------------------------------------------------------------------ Hilfen
+
+    private fun fakePdf(text: String, onCall: () -> Unit = {}) = object : PdfEngine {
+        override fun pages(file: File, password: String?, maxChars: Int): PdfPages {
+            onCall()
+            return PdfPages(listOf(text), 1)
+        }
+    }
 
     private fun file(name: String, bytes: ByteArray) = File(dir, name).apply { writeBytes(bytes) }
 
@@ -138,13 +145,18 @@ class DocumentReaderTest {
         assertEquals(FileKind.EXCEL, reader.kindOf("x.xlsx", null))
         assertEquals(FileKind.SLIDES, reader.kindOf("x.pptx", null))
         assertEquals(FileKind.OPEN_DOCUMENT, reader.kindOf("x.odt", null))
-        assertEquals(FileKind.ZIP, reader.kindOf("x.zip", null))
+        assertEquals(FileKind.ARCHIVE, reader.kindOf("x.zip", null))
+        assertEquals(FileKind.ARCHIVE, reader.kindOf("x.tar.gz", null))
+        assertEquals(FileKind.COMPRESSED, reader.kindOf("log.txt.gz", null))
+        assertEquals(FileKind.LEGACY_OFFICE, reader.kindOf("alt.doc", null))
+        assertEquals(FileKind.RTF, reader.kindOf("brief.rtf", null))
+        assertEquals(FileKind.EPUB, reader.kindOf("buch.epub", null))
         assertEquals(FileKind.TEXT, reader.kindOf("x.yml", null))
         assertEquals(FileKind.TEXT, reader.kindOf("Makefile", null))
         assertEquals(FileKind.PDF, reader.kindOf("Rechnung", "application/pdf"))
-        assertEquals(FileKind.UNSUPPORTED, reader.kindOf("foto.jpg", null))
-        assertEquals(FileKind.UNSUPPORTED, reader.kindOf("alt.doc", null))
-        assertEquals(FileKind.UNSUPPORTED, reader.kindOf("bild", "image/png"))
+        assertEquals(FileKind.IMAGE, reader.kindOf("foto.jpg", null))
+        assertEquals(FileKind.IMAGE, reader.kindOf("bild", "image/png"))
+        assertEquals(FileKind.UNSUPPORTED, reader.kindOf("lied.mp3", null))
         assertNotNull(reader.unsupportedReason("a.rar", null))
         assertNull(reader.unsupportedReason("a.txt", null))
     }
@@ -152,7 +164,7 @@ class DocumentReaderTest {
     @Test
     fun word() {
         val p = reader.readFile(file("d.docx", docx), "d.docx", null, 1000)
-        assertEquals("Hallo Welt\nZweite\tZeile äöü\nA1 \tB1\n", p.text!! + "\n")
+        assertEquals("Hallo Welt\nZweite\tZeile äöü\nA1\tB1\n", p.text!! + "\n")
         assertFalse(p.text!!.contains("gelöscht"))
     }
 
@@ -258,7 +270,7 @@ class DocumentReaderTest {
             )
         )
         val p = reader.readFile(file("o.odt", bytes), "o.odt", null, 1000)
-        assertEquals("Überschrift\nEin   Satz\tmit Span\nX \tY", p.text)
+        assertEquals("Überschrift\nEin   Satz\tmit Span\nX\tY", p.text)
     }
 
     @Test
@@ -270,7 +282,7 @@ class DocumentReaderTest {
 
     @Test
     fun emptyPdfExplainsScan() {
-        val r = DocumentReader(dir) { _, _ -> "\n\n" }
+        val r = DocumentReader(dir, fakePdf("\n\n"))
         val p = r.readFile(file("scan.pdf", "%PDF".toByteArray()), "scan.pdf", null, 1000)
         assertNull(p.text)
         assertTrue(p.problem!!.contains("eingescannt"))
@@ -315,18 +327,20 @@ class DocumentReaderTest {
             "projekt/.DS_Store" to byteArrayOf(0, 0)
         )
         val zip = file("p.zip", bytes)
-        val items = reader.listZip(zip)
+        val items = reader.listArchive(zip, "p.zip")
         assertEquals(
             listOf("projekt/README.md", "projekt/src/main.kt", "projekt/doc.docx", "projekt/bild.png", "projekt/innen.zip"),
             items.map { it.path }
         )
+        // Bilder brauchen Texterkennung (hier keine), ZIP im ZIP wird gelesen.
         val readable = items.filter { it.problem == null }.map { it.path }
-        assertEquals(listOf("projekt/README.md", "projekt/src/main.kt", "projekt/doc.docx"), readable)
+        assertEquals(listOf("projekt/README.md", "projekt/src/main.kt", "projekt/doc.docx", "projekt/innen.zip"), readable)
 
-        val parts = reader.readZip(zip, setOf("projekt/README.md", "projekt/doc.docx"), 1000)
-        assertEquals(2, parts.size)
+        val parts = reader.readArchive(zip, "p.zip", setOf("projekt/README.md", "projekt/doc.docx", "projekt/innen.zip"), 1000)
+        assertEquals(3, parts.size)
         assertEquals("# Projekt", parts[0].text)
         assertTrue(parts[1].text!!.startsWith("Hallo Welt"))
+        assertEquals("[Datei: a.txt]\na", parts[2].text)
     }
 
     @Test
@@ -336,7 +350,7 @@ class DocumentReaderTest {
             "b.txt" to "b".repeat(8).toByteArray(),
             "c.txt" to "c".repeat(8).toByteArray()
         )
-        val parts = reader.readZip(file("l.zip", bytes), setOf("a.txt", "b.txt", "c.txt"), 12)
+        val parts = reader.readArchive(file("l.zip", bytes), "l.zip", setOf("a.txt", "b.txt", "c.txt"), 12)
         assertEquals("a".repeat(8), parts[0].text)
         assertEquals("b".repeat(4), parts[1].text)
         assertTrue(parts[1].truncated)
@@ -363,7 +377,7 @@ class DocumentReaderTest {
             z.write("ok".toByteArray())
             z.closeEntry()
         }
-        val parts = reader.readZip(file("b.zip", bos.toByteArray()), setOf("bombe.docx", "ok.txt"), 1000)
+        val parts = reader.readArchive(file("b.zip", bos.toByteArray()), "b.zip", setOf("bombe.docx", "ok.txt"), 1000)
         assertNull(parts[0].text)
         assertTrue(parts[0].problem!!.contains("Zu groß"))
         assertEquals("ok", parts[1].text)

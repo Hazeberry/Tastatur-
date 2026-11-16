@@ -1,6 +1,7 @@
 package de.hazeberry.keyboard
 
 import android.annotation.SuppressLint
+import android.content.ClipDescription
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -16,6 +17,8 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputContentInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -436,6 +439,8 @@ class KeyboardService : InputMethodService() {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             // Nur in diese App wird der Dateiinhalt später eingefügt.
             .putExtra(FilePickerActivity.EXTRA_PACKAGE, currentInputEditorInfo?.packageName)
+            // Welche Dateitypen das Eingabefeld als Anhang annimmt (oft keine).
+            .putExtra(FilePickerActivity.EXTRA_MIME_TYPES, currentInputEditorInfo?.contentMimeTypes ?: emptyArray<String>())
         try {
             startActivity(intent)
         } catch (e: Exception) {
@@ -448,14 +453,36 @@ class KeyboardService : InputMethodService() {
      * Tippt zuvor gewählte Dateien ein, sobald die App, aus der 📁 kam, wieder ein Eingabefeld
      * hat. Das klappt auch, wenn die Tastatur dabei noch nicht sichtbar ist.
      */
-    private fun insertPendingFile(info: EditorInfo?) {
-        if (!FileBridge.hasPending() || info == null || currentInputConnection == null) return
+    internal fun insertPendingFile(info: EditorInfo?) {
+        val ic = currentInputConnection
+        if (!FileBridge.hasPending() || info == null || ic == null) return
         if (info.inputType == InputType.TYPE_NULL) return
         // Dateiinhalt gehört nie in ein Passwortfeld. Er wartet, bis ein normales Feld kommt.
         if (isSensitiveField()) return
-        val text = FileBridge.take(info.packageName) ?: return
-        type(text)
-        updateAutoCap()
+        FileBridge.take(info.packageName)?.let { text ->
+            type(text)
+            updateAutoCap()
+        }
+        FileBridge.takeAttachments(info.packageName)?.let { list ->
+            val accepted = info.contentMimeTypes.orEmpty()
+            var rejected = 0
+            for (a in list) {
+                val fits = accepted.any { ClipDescription.compareMimeTypes(a.mime, it) }
+                val ok = fits && ic.commitContent(
+                    InputContentInfo(a.uri, ClipDescription(a.label, arrayOf(a.mime)), null),
+                    InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,
+                    null
+                )
+                if (!ok) rejected++
+            }
+            if (rejected > 0) {
+                Toast.makeText(
+                    this,
+                    "Die App hat ${if (rejected == 1) "den Anhang" else "$rejected Anhänge"} nicht angenommen.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private fun showKeyboardPicker() {
