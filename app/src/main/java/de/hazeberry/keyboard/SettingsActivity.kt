@@ -42,6 +42,8 @@ class SettingsActivity : Activity() {
     private lateinit var minutesField: EditText
     private lateinit var hapticsSwitch: Switch
     private lateinit var fileHeaderSwitch: Switch
+    private lateinit var filePreviewSwitch: Switch
+    private lateinit var queriesField: EditText
     private lateinit var termuxSwitch: Switch
     private lateinit var termuxTriggerSwitch: Switch
     private lateinit var termuxActionField: EditText
@@ -73,6 +75,11 @@ class SettingsActivity : Activity() {
         enabledSwitch = Switch(this).apply { text = "Signatur automatisch einfügen" }
         hapticsSwitch = Switch(this).apply { text = "Vibration beim Tippen" }
         fileHeaderSwitch = Switch(this).apply { text = "Dateinamen über den Inhalt setzen" }
+        filePreviewSwitch = Switch(this).apply { text = "Vorschau vor dem Einfügen" }
+        queriesField = input("Abfragen", multiline = true).apply {
+            minLines = 8
+            setHorizontallyScrolling(false)
+        }
         termuxSwitch = Switch(this).apply { text = "Termux-Anbindung (Taste ▶)" }
         termuxTriggerSwitch = Switch(this).apply { text = "Kürzel wie ;;datum (nach der Leertaste)" }
         termuxActionField = input("Standard-Aktion beim Tippen auf ▶ (z. B. standard)")
@@ -139,6 +146,29 @@ class SettingsActivity : Activity() {
             )
         )
         page.addView(fileHeaderSwitch)
+        page.addView(filePreviewSwitch)
+        page.addView(
+            note(
+                "Mit Vorschau siehst du vor dem Einfügen den fertigen Text, kannst Dateien abwählen " +
+                    "und eine Abfrage davorsetzen. Dort gibt es auch „In Zwischenablage“, falls " +
+                    "die Tastatur nach der Auswahl nicht von selbst erscheint. Ohne Vorschau wird " +
+                    "sofort eingefügt, mit der zuletzt benutzten Abfrage."
+            )
+        )
+
+        page.addView(heading("Abfragen (Vorlagen für Dateien)"))
+        page.addView(
+            note(
+                "Eine Abfrage steht vor dem Dateiinhalt, getrennt durch eine Linie, und sagt dem " +
+                    "Modell, was es damit tun soll. Jede Vorlage beginnt mit einer Zeile \"## Name\", " +
+                    "darunter steht ihr Text. Ist die Signatur fällig, kommt sie noch davor."
+            )
+        )
+        page.addView(queriesField)
+        page.addView(button("Vorlagen zurücksetzen") {
+            queriesField.setText(FileCompose.DEFAULT_TEMPLATES)
+            Toast.makeText(this, "Mitgelieferte Vorlagen eingesetzt.", Toast.LENGTH_SHORT).show()
+        })
 
         page.addView(heading("Termux"))
         page.addView(
@@ -247,6 +277,8 @@ class SettingsActivity : Activity() {
         enabledSwitch.isChecked = store.enabled
         hapticsSwitch.isChecked = store.haptics
         fileHeaderSwitch.isChecked = store.fileHeader
+        filePreviewSwitch.isChecked = store.filePreview
+        queriesField.setText(store.queryTemplatesText)
         termuxSwitch.isChecked = store.termuxEnabled
         termuxTriggerSwitch.isChecked = store.termuxTriggers
         termuxActionField.setText(store.termuxAction)
@@ -260,6 +292,8 @@ class SettingsActivity : Activity() {
         store.enabled = enabledSwitch.isChecked
         store.haptics = hapticsSwitch.isChecked
         store.fileHeader = fileHeaderSwitch.isChecked
+        store.filePreview = filePreviewSwitch.isChecked
+        store.queryTemplatesText = queriesField.text.toString().trim()
         store.termuxEnabled = termuxSwitch.isChecked
         store.termuxTriggers = termuxTriggerSwitch.isChecked
         store.termuxAction = termuxActionField.text.toString().trim().ifEmpty { "standard" }

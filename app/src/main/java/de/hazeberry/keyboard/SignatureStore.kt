@@ -51,6 +51,32 @@ class SignatureStore(context: Context) {
             prefs.edit().putBoolean(K_FILE_HEADER, value).apply()
         }
 
+    /** Vorschau mit Abfrage-Auswahl, bevor Dateien eingefügt werden. Aus = direkt einfügen. */
+    var filePreview: Boolean
+        get() = prefs.getBoolean(K_FILE_PREVIEW, true)
+        set(value) {
+            prefs.edit().putBoolean(K_FILE_PREVIEW, value).apply()
+        }
+
+    /**
+     * Abfrage-Vorlagen als Text (Format siehe [FileCompose]). Nie bearbeitet = die mitgelieferten;
+     * ein leerer Text bedeutet bewusst "keine Vorlagen".
+     */
+    var queryTemplatesText: String
+        get() = prefs.getString(K_QUERIES, null) ?: FileCompose.DEFAULT_TEMPLATES
+        set(value) {
+            prefs.edit().putString(K_QUERIES, value).apply()
+        }
+
+    val queryTemplates: List<QueryTemplate> get() = FileCompose.parseTemplates(queryTemplatesText)
+
+    /** Name der zuletzt benutzten Abfrage; leer = keine. Gilt auch ohne Vorschau. */
+    var lastQuery: String
+        get() = prefs.getString(K_LAST_QUERY, "") ?: ""
+        set(value) {
+            prefs.edit().putString(K_LAST_QUERY, value).apply()
+        }
+
     /** Termux-Anbindung (Taste ▶ und Kürzel). Aus, bis der Nutzer sie einschaltet. */
     var termuxEnabled: Boolean
         get() = prefs.getBoolean(K_TERMUX, false)
@@ -140,6 +166,9 @@ class SignatureStore(context: Context) {
         const val K_HAPTICS = "haptics"
         const val K_TOKEN = "tasker_token"
         const val K_FILE_HEADER = "file_header"
+        const val K_FILE_PREVIEW = "file_preview"
+        const val K_QUERIES = "query_templates"
+        const val K_LAST_QUERY = "last_query"
         const val K_TERMUX = "termux_enabled"
         const val K_TERMUX_ACTION = "termux_action"
         const val K_TERMUX_TRIGGERS = "termux_triggers"

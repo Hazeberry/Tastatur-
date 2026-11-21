@@ -3,7 +3,9 @@ package de.hazeberry.keyboard
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ClipDescription
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
@@ -14,8 +16,16 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.webkit.MimeTypeMap
+import android.graphics.Typeface
+import android.view.View
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.io.FileNotFoundException
@@ -539,11 +549,6 @@ class FilePickerActivity : Activity() {
     private fun deliver(parts: List<Part>) {
         hideProgress()
         val ok = parts.filter { it.text != null }
-        if (ok.isNotEmpty()) {
-            val headers = ok.size > 1 || store.fileHeader
-            val text = ok.joinToString("\n\n") { if (headers) "[Datei: ${it.name}]\n${it.text}" else it.text!! }
-            FileBridge.put(text, targetPackage)
-        }
 
         // Probleme einzelner Dateien in Archiven mit anzeigen.
         val flat = parts.flatMap { p ->
@@ -552,33 +557,172 @@ class FilePickerActivity : Activity() {
         val failed = flat.filter { it.text == null }
         val cut = flat.filter { it.text != null && it.truncated }
         val ocrUsed = flat.any { it.ocr } || parts.any { it.ocr }
-        if (failed.isEmpty() && cut.isEmpty()) {
-            val base = if (ok.size == 1) "Datei bereit" else "${ok.size} Dateien bereit"
-            toast(if (ocrUsed) "$base (Texterkennung, bitte prüfen). Tippe ins Eingabefeld." else "$base. Tippe ins Eingabefeld.")
-            finish()
-            return
-        }
-
         val lines = ArrayList<String>()
         cut.forEach { lines.add("• ${it.name}: gekürzt (höchstens ${MAX_CHARS / 1000}.000 Zeichen insgesamt)") }
         failed.forEach { lines.add("• ${it.name}: ${it.problem ?: "nicht lesbar"}") }
-        val shown = lines.take(MAX_LINES).toMutableList()
-        if (lines.size > MAX_LINES) shown.add("… und ${lines.size - MAX_LINES} weitere")
-        if (ocrUsed) shown.add("\nEin Teil des Textes stammt aus der Texterkennung und kann Fehler enthalten.")
+        val notes = ArrayList(lines.take(MAX_LINES))
+        if (lines.size > MAX_LINES) notes.add("… und ${lines.size - MAX_LINES} weitere")
+        val notesText = (notes + if (ocrUsed) listOf("Ein Teil des Textes stammt aus der Texterkennung und kann Fehler enthalten.") else emptyList())
+            .joinToString("\n")
 
-        val title = when {
-            ok.isEmpty() -> "Nichts eingefügt"
-            ok.size == 1 -> "1 Datei bereit"
-            else -> "${ok.size} Dateien bereit"
+        when {
+            ok.isEmpty() -> showSummary("Nichts eingefügt", notesText)
+            store.filePreview -> showPreview(ok, notesText)
+            else -> {
+                // Ohne Vorschau: sofort einfügen, mit der zuletzt benutzten Abfrage.
+                val query = FileCompose.find(store.queryTemplates, store.lastQuery)
+                FileBridge.put(FileCompose.build(query, ok, store.fileHeader), targetPackage)
+                if (notes.isEmpty()) {
+                    val base = if (ok.size == 1) "Datei bereit" else "${ok.size} Dateien bereit"
+                    toast(if (ocrUsed) "$base (Texterkennung, bitte prüfen). Tippe ins Eingabefeld." else "$base. Tippe ins Eingabefeld.")
+                    finish()
+                } else {
+                    val title = if (ok.size == 1) "1 Datei bereit" else "${ok.size} Dateien bereit"
+                    showSummary(title, notesText + "\n\nTippe ins Eingabefeld, falls die Tastatur nicht von selbst erscheint.")
+                }
+            }
         }
-        val footer = if (ok.isEmpty()) "" else "\n\nTippe ins Eingabefeld, falls die Tastatur nicht von selbst erscheint."
-        lastSummary = shown.joinToString("\n") + footer
+    }
+
+    private fun showSummary(title: String, message: String) {
+        lastSummary = message
         AlertDialog.Builder(this, dialogTheme())
             .setTitle(title)
-            .setMessage(lastSummary)
+            .setMessage(message)
             .setPositiveButton("OK") { _, _ -> finish() }
             .setOnCancelListener { finish() }
             .show()
+    }
+
+    /**
+     * Vorschau vor dem Einfügen: Abfrage wählen, Dateien an- oder abwählen, fertigen Text ansehen,
+     * dann einfügen oder in die Zwischenablage kopieren.
+     */
+    private fun showPreview(ok: List<Part>, notesText: String) {
+        val templates = store.queryTemplates
+        var query: QueryTemplate? = FileCompose.find(templates, store.lastQuery)
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        fun label(text: String) = TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setPadding(0, dp(12), 0, dp(2))
+            alpha = 0.7f
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+
+        // Abfrage wählen
+        val group = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val none = RadioButton(this).apply { text = "Keine Abfrage"; tag = "query:"; id = View.generateViewId() }
+        group.addView(none)
+        val byId = HashMap<Int, QueryTemplate?>().apply { put(none.id, null) }
+        for (t in templates) {
+            val rb = RadioButton(this).apply { text = t.name; tag = "query:${t.name}"; id = View.generateViewId() }
+            group.addView(rb)
+            byId[rb.id] = t
+            if (t == query) group.check(rb.id)
+        }
+        if (query == null) group.check(none.id)
+        root.addView(label("Abfrage davorsetzen"))
+        root.addView(group)
+
+        // Dateien wählen (bei mehreren; bei sehr vielen, z. B. aus einem Archiv, ist die Auswahl
+        // schon im Archiv-Dialog passiert und die Liste wäre endlos)
+        val checks = ArrayList<CheckBox>()
+        if (ok.size in 2..MAX_PREVIEW_FILES) {
+            root.addView(label("Dateien"))
+            for ((i, part) in ok.withIndex()) {
+                val box = CheckBox(this).apply {
+                    text = "${part.name} · ${FileCompose.count(part.text!!.length)} Zeichen"
+                    tag = "file:$i"
+                    isChecked = true
+                }
+                checks.add(box)
+                root.addView(box)
+            }
+        }
+
+        if (notesText.isNotBlank()) {
+            root.addView(label("Hinweise"))
+            root.addView(TextView(this).apply { text = notesText; textSize = 13f; tag = "notes" })
+        }
+
+        val counter = TextView(this).apply { tag = "counter"; textSize = 13f }
+        val preview = TextView(this).apply {
+            tag = "preview"
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setBackgroundColor(0x1A808080)
+            setTextIsSelectable(true)
+        }
+        root.addView(label("Fertiger Text"))
+        root.addView(counter)
+        root.addView(preview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(4)
+        })
+
+        fun selected(): List<Part> = if (checks.isEmpty()) ok else ok.filterIndexed { i, _ -> checks[i].isChecked }
+        fun composed(): String = FileCompose.build(query, selected(), store.fileHeader)
+
+        val title = if (ok.size == 1) "1 Datei bereit" else "${ok.size} Dateien bereit"
+        val dialog = AlertDialog.Builder(this, dialogTheme())
+            .setTitle(title)
+            .setView(ScrollView(this).apply { addView(root) })
+            .setPositiveButton("Einfügen", null)
+            .setNeutralButton("In Zwischenablage", null)
+            .setNegativeButton("Abbrechen") { _, _ -> finish() }
+            .setOnCancelListener { finish() }
+            .create()
+
+        fun refresh() {
+            val text = composed()
+            counter.text = "${FileCompose.count(text.length)} Zeichen"
+            preview.text = if (text.isEmpty()) "Keine Datei ausgewählt." else FileCompose.preview(text)
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = text.isNotEmpty()
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = text.isNotEmpty()
+        }
+        group.setOnCheckedChangeListener { _, checkedId ->
+            query = byId[checkedId]
+            store.lastQuery = query?.name.orEmpty()
+            refresh()
+        }
+        checks.forEach { it.setOnCheckedChangeListener { _, _ -> refresh() } }
+
+        dialog.setOnShowListener {
+            // Diese Knöpfe schließen den Dialog nicht von selbst, damit ein Fehler sichtbar bleibt.
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val text = composed()
+                if (text.isEmpty()) return@setOnClickListener
+                FileBridge.put(text, targetPackage)
+                toast(
+                    if (ok.any { it.ocr }) "Bereit (Texterkennung, bitte prüfen). Tippe ins Eingabefeld."
+                    else "Bereit. Tippe ins Eingabefeld."
+                )
+                dialog.dismiss()
+                finish()
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                val text = composed()
+                if (text.isEmpty()) return@setOnClickListener
+                try {
+                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Dateiinhalt", text))
+                } catch (e: Exception) {
+                    toast("Kopieren hat nicht geklappt (Text zu groß?).")
+                    return@setOnClickListener
+                }
+                toast("In die Zwischenablage kopiert. Zum Einfügen ins Feld tippen und „Einfügen“ wählen.")
+                dialog.dismiss()
+                finish()
+            }
+            refresh()
+        }
+        dialog.show()
     }
 
     // ------------------------------------------------------------------ Hilfen
@@ -648,6 +792,9 @@ class FilePickerActivity : Activity() {
         private const val MAX_COPY_BYTES = 100_000_000L
 
         private const val MAX_LINES = 15
+
+        /** Bis zu so vielen Dateien gibt es in der Vorschau einzelne Häkchen. */
+        private const val MAX_PREVIEW_FILES = 30
 
         /** Für Tests: eine andere Texterkennung einsetzen. */
         @Volatile

@@ -20,7 +20,8 @@ Excel, Bilder, ZIP ...) direkt in den Chat einfügen oder Dateien anhängen.
   eingescannt), **Word/Excel/PowerPoint** (neu und alt, auch mit Passwort), **LibreOffice**,
   **RTF**, **E-Books**, **Outlook-Mails**, **Google Docs**, **Bilder** (Texterkennung) und
   **Archive** (ZIP, 7z, tar.gz ...), auch mehrere auf einmal. Wo die App es zulässt, auch als
-  **Anhang**
+  **Anhang**. Vorher zeigt eine **Vorschau** den fertigen Text; dort lässt sich eine **Abfrage**
+  davorsetzen, Dateien abwählen und alles auch **in die Zwischenablage** kopieren
 - Taste **▶** (optional): eigene **Termux-Skripte** auf den markierten Text oder das ganze Feld
   anwenden, Kürzel wie `;;datum` ersetzen lassen
 - Passwortfelder werden nie gezählt und nie mit einer Signatur versehen
@@ -60,7 +61,42 @@ Lokal geht es mit Android Studio (Ordner öffnen) oder mit `gradle assembleDebug
    dann **Einfügen**.
 5. Ist eine Datei mit Passwort geschützt, fragt die Tastatur danach. Falsches Passwort: noch
    einmal fragen. "Überspringen" lässt die Datei weg. Das Passwort wird nicht gespeichert.
-6. Du kommst zurück in die App, der Text wird eingefügt. Ist die Signatur fällig, steht sie davor.
+6. Es erscheint die **Vorschau** (siehe "Abfragen und Vorschau"): Abfrage wählen, Dateien an-
+   oder abwählen, **Einfügen** oder **In Zwischenablage**.
+7. Du kommst zurück in die App, der Text wird eingefügt. Ist die Signatur fällig, steht sie davor.
+
+### Abfragen und Vorschau
+
+Vor dem Einfügen zeigt die Tastatur den fertigen Text und lässt dich noch eingreifen:
+
+- **Abfrage davorsetzen:** Eine Abfrage sagt dem Modell, was es mit dem Dateiinhalt tun soll
+  (zusammenfassen, übersetzen, Fragen stellen ...). Sie steht **vor** dem Inhalt, getrennt durch
+  eine Linie, denn die Anweisung wirkt vor den Daten besser. Mitgeliefert sind *Zusammenfassen*,
+  *Analysieren* und *Fragen finden*. Die zuletzt gewählte Abfrage ist beim nächsten Mal wieder
+  ausgewählt; "Keine Abfrage" fügt nur den Inhalt ein.
+- **Dateien abwählen:** Bei mehreren Dateien (bis 30) gibt es je ein Häkchen mit Zeichenzahl.
+- **Vorschau und Zeichenzahl:** Anfang des fertigen Textes und die Gesamtlänge.
+- **In Zwischenablage:** kopiert den fertigen Text, statt ihn einzufügen. Praktisch, wenn die
+  Tastatur nach dem Dateidialog nicht von selbst erscheint oder du den Text in einer anderen App
+  brauchst. Dort ins Feld tippen und "Einfügen" wählen.
+- Hinweise zu Dateien, die nicht lesbar waren, oder zu Text aus der Texterkennung stehen in der
+  Vorschau.
+
+Reihenfolge im Chat: **Signatur** (falls fällig), dann **Abfrage**, dann **Dateiinhalt**.
+
+**Eigene Abfragen** schreibst du in den Einstellungen (Abschnitt "Abfragen") in ein Textfeld. Jede
+beginnt mit einer Zeile `## Name`, darunter steht ihr Text:
+
+```
+## Übersetzen
+Übersetze den folgenden Text ins Englische und behalte die Absätze.
+
+## Mail-Antwort
+Schreibe eine höfliche Antwort auf die folgende Mail. Halte sie kurz.
+```
+
+"Vorlagen zurücksetzen" stellt die mitgelieferten wieder her. Wer die Vorschau nicht mag, schaltet
+sie in den Einstellungen aus; dann wird sofort mit der zuletzt benutzten Abfrage eingefügt.
 
 ### Was gelesen wird
 
@@ -238,6 +274,7 @@ app/src/main/java/de/hazeberry/keyboard/
   PdfText.kt            Text aus PDFs (PDFBox)
   TesseractOcr.kt       Texterkennung für Bilder und eingescannte PDF-Seiten
   AttachmentProvider.kt Dateien für Anhänge bereitstellen
+  FileCompose.kt        Abfrage-Vorlagen und Zusammensetzen von Abfrage + Dateien
   FileBridge.kt         Übergabe von Text und Anhängen an die Tastatur
   TermuxClient.kt       Termux-Befehle starten (RUN_COMMAND), Ergebnis empfangen
   TermuxLogic.kt        Regeln der Termux-Anbindung, Einrichtungsskript

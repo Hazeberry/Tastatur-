@@ -43,12 +43,18 @@ Robolectric lädt beim ersten Lauf das Android-Image (~150 MB) aus Maven Central
    verarbeitet die Auswahl in **einem Hintergrund-Thread**. Rückfragen (Text oder Anhang,
    Archiv-Auswahl, Passwort) laufen über `ask { answer -> Dialog }`: zeigt den Dialog auf dem
    Main-Thread und blockiert den Worker per `CountDownLatch`. Abbruch -> `CancelledException`.
-3. Ergebnis geht an `FileBridge` (Singleton im selben Prozess, nur im Speicher, verfällt nach
+3. Der Text wird in `FilePickerActivity.deliver` zusammengesetzt (`FileCompose.build`: Abfrage,
+   Trennlinie, `[Datei: name]`-Blöcke; Abfrage-Vorlagen kommen aus `SignatureStore.queryTemplates`,
+   ein Textformat mit `## Name`-Zeilen). Standard ist `showPreview` (Abfrage wählen, Dateien
+   abwählen, "Einfügen" oder "In Zwischenablage"); ohne Vorschau (`filePreview = false`) wird
+   sofort mit `lastQuery` eingefügt. Erst "Einfügen" legt den Text in die `FileBridge`.
+   Die Signatur kommt danach automatisch davor, weil das Einfügen über `type()` läuft.
+4. Ergebnis geht an `FileBridge` (Singleton im selben Prozess, nur im Speicher, verfällt nach
    3 Minuten, gilt nur für das Ziel-Paket).
-4. `KeyboardService.onStartInput` -> `insertPendingFile`: Text per `type()` (Signatur greift),
+5. `KeyboardService.onStartInput` -> `insertPendingFile`: Text per `type()` (Signatur greift),
    Anhänge per `commitContent` nur, wenn das Feld den MIME-Typ annimmt.
    Alternativ "Teilen" direkt an die Ziel-App (`<queries>` im Manifest für die Sichtbarkeit).
-5. Anhänge liegen als Kopie im Cache und werden über `AttachmentProvider` bereitgestellt
+6. Anhänge liegen als Kopie im Cache und werden über `AttachmentProvider` bereitgestellt
    (nicht exportiert, `grantUriPermissions`, Pfadprüfung, Aufräumen nach 24 h).
 
 ### Termux-Anbindung (Taste ▶, Kürzel `;;name`)
@@ -97,7 +103,7 @@ Robolectric lädt beim ersten Lauf das Android-Image (~150 MB) aus Maven Central
 - Die App hat **keine INTERNET-Berechtigung**; das ist ein Kernversprechen (README) und soll so bleiben.
 
 ## Tests
-- JVM-Tests: `DocumentReaderTest`, `MoreFormatsTest`, `PdfBoxTest`. Echte Beispieldateien in
+- JVM-Tests: `DocumentReaderTest`, `MoreFormatsTest`, `PdfBoxTest`, `FileComposeTest`. Echte Beispieldateien in
   `app/src/test/resources/samples/` (Herkunft und Passwörter siehe README dort); alles andere
   (ZIP, 7z, tar, verschlüsselte ZIPs, RTF, EPUB) erzeugen die Tests selbst.
 - PDFBox braucht außerhalb von Android seine Schriftdaten auf dem Klassenpfad: die Gradle-Aufgabe
@@ -105,7 +111,8 @@ Robolectric lädt beim ersten Lauf das Android-Image (~150 MB) aus Maven Central
   den Assets.
 - Robolectric (`AndroidFlowTest`, SDK 34 per `robolectric.properties`): Activity-Abläufe mit
   `EXTRA_NO_PICKER` + `start(uris)`, Fake-OCR über `FilePickerActivity.ocrEngine`, Meldungen über
-  `lastToast`/`lastSummary`; Tastatur-Tests setzen `mStartedInputConnection`/`mInputEditorInfo`
+  `lastToast`/`lastSummary`; Dialoginhalte der Vorschau werden über View-Tags gefunden
+  (`query:<Name>`, `file:<n>`, `preview`, `counter`, `notes`); Tastatur-Tests setzen `mStartedInputConnection`/`mInputEditorInfo`
   per Reflection und nutzen eine Proxy-`InputConnection`. Braucht `--add-opens java.base/java.io`
   (in `build.gradle.kts` gesetzt).
 - Termux: `TermuxLogicTest` führt das echte `SETUP_SCRIPT` mit bash in einem Temp-Home aus und

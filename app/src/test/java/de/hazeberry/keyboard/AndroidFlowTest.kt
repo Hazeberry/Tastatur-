@@ -1,6 +1,8 @@
 package de.hazeberry.keyboard
 
 import android.app.AlertDialog
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Looper
@@ -8,8 +10,12 @@ import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
+import android.view.View
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.RadioButton
+import android.widget.TextView
 import android.inputmethodservice.InputMethodService
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.AesKeyStrength
@@ -84,6 +90,15 @@ class AndroidFlowTest {
         return found!!
     }
 
+    /** Wartet auf die Vorschau und drückt "Einfügen". */
+    private fun confirmPreview(titlePrefix: String): AlertDialog {
+        val dialog = waitForDialog(titlePrefix)
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        return dialog
+    }
+
+    private fun <T : View> AlertDialog.view(tag: String): T = window!!.decorView.findViewWithTag(tag)
+
     private fun launch(vararg files: File, mimeTypes: Array<String> = emptyArray()): FilePickerActivity {
         val intent = Intent(context, FilePickerActivity::class.java)
             .putExtra(FilePickerActivity.EXTRA_PACKAGE, "com.example.chat")
@@ -93,6 +108,8 @@ class AndroidFlowTest {
         activity.start(files.map { Uri.fromFile(it) })
         return activity
     }
+
+    private fun write(name: String, text: String) = write(name, text.toByteArray())
 
     private fun write(name: String, bytes: ByteArray) = File(dir, name).apply { writeBytes(bytes) }
 
@@ -122,9 +139,10 @@ class AndroidFlowTest {
     @Test
     fun textFileEndsUpInBridge() {
         val activity = launch(write("notizen.md", "# Einkauf\n- Milch".toByteArray()))
+        confirmPreview("1 Datei bereit")
         idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
         assertEquals("[Datei: notizen.md]\n# Einkauf\n- Milch", FileBridge.take("com.example.chat"))
-        assertEquals("Datei bereit. Tippe ins Eingabefeld.", FilePickerActivity.lastToast)
+        assertEquals("Bereit. Tippe ins Eingabefeld.", FilePickerActivity.lastToast)
     }
 
     @Test
@@ -138,6 +156,7 @@ class AndroidFlowTest {
 
         enterPassword(waitForDialog("Passwort nötig"), "falsch")
         enterPassword(waitForDialog("Falsches Passwort"), "sesam")
+        confirmPreview("1 Datei bereit")
 
         idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
         assertEquals("[Datei: plan.md]\n# Geheimer Plan", FileBridge.take("com.example.chat"))
@@ -148,10 +167,14 @@ class AndroidFlowTest {
         val activity = launch(encryptedZip("zu.zip", "pw"), write("offen.txt", "offen".toByteArray()))
         // Mehrfachauswahl: Archive werden ohne Auswahldialog gelesen, aber nach dem Passwort gefragt.
         waitForDialog("Passwort nötig").getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
-        idleUntil("Zusammenfassung") { FilePickerActivity.lastSummary != null }
-        assertTrue(FilePickerActivity.lastSummary!!, FilePickerActivity.lastSummary!!.contains("zu.zip: Übersprungen, die Datei ist passwortgeschützt."))
+        // Die Vorschau nennt, was fehlt, und enthält nur die lesbare Datei.
+        val preview = waitForDialog("1 Datei bereit")
+        val notes = preview.view<TextView>("notes").text.toString()
+        assertTrue(notes, notes.contains("zu.zip: Übersprungen, die Datei ist passwortgeschützt."))
+        assertTrue(!FileBridge.hasPending()) // erst nach "Einfügen"
+        preview.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
         assertEquals("[Datei: offen.txt]\noffen", FileBridge.take("com.example.chat"))
-        assertTrue(!activity.isFinishing) // Zusammenfassung wartet auf OK
     }
 
     @Test
@@ -174,6 +197,7 @@ class AndroidFlowTest {
         }
         val activity = launch(f)
         enterPassword(waitForDialog("Passwort nötig"), "4711")
+        confirmPreview("1 Datei bereit")
         idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
         assertEquals("[Datei: vertrag.pdf]\nVertragstext", FileBridge.take("com.example.chat"))
     }
@@ -211,9 +235,172 @@ class AndroidFlowTest {
     fun imageAsTextUsesOcr() {
         val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
         val activity = launch(write("scan.png", png))
+        confirmPreview("1 Datei bereit")
         idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
         assertEquals("[Datei: scan.png]\nText aus dem Bild", FileBridge.take("com.example.chat"))
         assertTrue(FilePickerActivity.lastToast!!.contains("Texterkennung"))
+    }
+
+    // ------------------------------------------------------------------ Vorschau, Abfragen, Zwischenablage
+
+    private fun clipboardText(): String? =
+        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+            .primaryClip?.getItemAt(0)?.text?.toString()
+
+    @Test
+    fun previewShowsCounterAndText() {
+        launch(write("a.txt", "Alpha Beta"))
+        val d = waitForDialog("1 Datei bereit")
+        // Standardmäßig steht der Dateiname davor.
+        assertEquals("[Datei: a.txt]\nAlpha Beta", d.view<TextView>("preview").text.toString())
+        assertEquals("25 Zeichen", d.view<TextView>("counter").text.toString())
+        // Ohne gewählte Abfrage steht keine davor.
+        assertTrue(d.view<RadioButton>("query:").isChecked)
+    }
+
+    @Test
+    fun chosenQueryComesFirstAndIsRemembered() {
+        val activity = launch(write("a.txt", "Alpha"))
+        val d = waitForDialog("1 Datei bereit")
+        d.view<RadioButton>("query:Zusammenfassen").isChecked = true
+        val preview = d.view<TextView>("preview").text.toString()
+        assertTrue(preview, preview.startsWith("Fasse den folgenden Text verständlich"))
+        assertTrue(preview, preview.endsWith("\n\n———\n\n[Datei: a.txt]\nAlpha"))
+        d.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
+        assertEquals(
+            FileCompose.parseTemplates(FileCompose.DEFAULT_TEMPLATES)[0].text + "\n\n———\n\n[Datei: a.txt]\nAlpha",
+            FileBridge.take("com.example.chat")
+        )
+        assertEquals("Zusammenfassen", SignatureStore(context).lastQuery)
+    }
+
+    @Test
+    fun rememberedQueryIsPreselectedNextTime() {
+        SignatureStore(context).lastQuery = "Analysieren"
+        launch(write("a.txt", "Alpha"))
+        val d = waitForDialog("1 Datei bereit")
+        assertTrue(d.view<RadioButton>("query:Analysieren").isChecked)
+        assertTrue(d.view<TextView>("preview").text.startsWith("Analysiere den folgenden Text"))
+    }
+
+    @Test
+    fun deletedTemplateFallsBackToNoQuery() {
+        SignatureStore(context).lastQuery = "Gibt es nicht mehr"
+        launch(write("a.txt", "Alpha"))
+        assertTrue(waitForDialog("1 Datei bereit").view<RadioButton>("query:").isChecked)
+    }
+
+    @Test
+    fun filesCanBeDeselectedAndKeepTheirHeaders() {
+        val activity = launch(write("a.txt", "Alpha"), write("b.txt", "Beta"))
+        val d = waitForDialog("2 Dateien bereit")
+        assertEquals("[Datei: a.txt]\nAlpha\n\n[Datei: b.txt]\nBeta", d.view<TextView>("preview").text.toString())
+        d.view<CheckBox>("file:0").isChecked = false
+        assertEquals("[Datei: b.txt]\nBeta", d.view<TextView>("preview").text.toString())
+        d.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
+        assertEquals("[Datei: b.txt]\nBeta", FileBridge.take("com.example.chat"))
+    }
+
+    @Test
+    fun manyFilesGetNoCheckboxList() {
+        val files = (1..31).map { write("f$it.txt", "Text $it") }.toTypedArray()
+        launch(*files)
+        val d = waitForDialog("31 Dateien bereit")
+        assertNull(d.window!!.decorView.findViewWithTag<View>("file:0"))
+        assertTrue(d.view<TextView>("counter").text.toString().endsWith("Zeichen"))
+        assertTrue(d.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled)
+    }
+
+    @Test
+    fun nothingSelectedDisablesButtons() {
+        launch(write("a.txt", "Alpha"), write("b.txt", "Beta"))
+        val d = waitForDialog("2 Dateien bereit")
+        d.view<CheckBox>("file:0").isChecked = false
+        d.view<CheckBox>("file:1").isChecked = false
+        assertEquals("Keine Datei ausgewählt.", d.view<TextView>("preview").text.toString())
+        assertTrue(!d.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled)
+        assertTrue(!d.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled)
+        d.view<CheckBox>("file:1").isChecked = true
+        assertTrue(d.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled)
+    }
+
+    @Test
+    fun clipboardButtonCopiesInsteadOfInserting() {
+        val activity = launch(write("a.txt", "Alpha"))
+        val d = waitForDialog("1 Datei bereit")
+        d.view<RadioButton>("query:Fragen finden").isChecked = true
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+        idleUntil("fertig") { activity.isFinishing }
+        assertTrue(!FileBridge.hasPending())
+        val clip = clipboardText()!!
+        assertTrue(clip, clip.startsWith("Lies den folgenden Text und erstelle zehn gezielte Fragen"))
+        assertTrue(clip, clip.endsWith("\n\n———\n\n[Datei: a.txt]\nAlpha"))
+        assertTrue(FilePickerActivity.lastToast!!.contains("Zwischenablage"))
+    }
+
+    @Test
+    fun cancelInsertsNothing() {
+        val activity = launch(write("a.txt", "Alpha"))
+        waitForDialog("1 Datei bereit").getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+        idleUntil("fertig") { activity.isFinishing }
+        assertTrue(!FileBridge.hasPending())
+        assertNull(clipboardText())
+    }
+
+    @Test
+    fun previewNamesProblems() {
+        launch(write("a.txt", "Alpha"), write("lied.mp3", ByteArray(50)))
+        val d = waitForDialog("1 Datei bereit")
+        val notes = d.view<TextView>("notes").text.toString()
+        assertTrue(notes, notes.contains("lied.mp3") && notes.contains("Audio"))
+        assertEquals("[Datei: a.txt]\nAlpha", d.view<TextView>("preview").text.toString())
+    }
+
+    @Test
+    fun previewWarnsAboutOcr() {
+        launch(write("scan.png", byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)))
+        val d = waitForDialog("1 Datei bereit")
+        assertTrue(d.view<TextView>("notes").text.toString().contains("Texterkennung"))
+        assertEquals("[Datei: scan.png]\nText aus dem Bild", d.view<TextView>("preview").text.toString())
+    }
+
+    @Test
+    fun withoutPreviewInsertsDirectlyWithLastQuery() {
+        SignatureStore(context).apply { filePreview = false; lastQuery = "Analysieren" }
+        val activity = launch(write("a.txt", "Alpha"))
+        idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
+        assertEquals(
+            FileCompose.parseTemplates(FileCompose.DEFAULT_TEMPLATES)[1].text + "\n\n———\n\n[Datei: a.txt]\nAlpha",
+            FileBridge.take("com.example.chat")
+        )
+        assertEquals("Datei bereit. Tippe ins Eingabefeld.", FilePickerActivity.lastToast)
+    }
+
+    @Test
+    fun withoutPreviewAndWithoutQueryKeepsOldBehavior() {
+        SignatureStore(context).filePreview = false
+        val activity = launch(write("a.txt", "Alpha"))
+        idleUntil("Text bereit") { FileBridge.hasPending() && activity.isFinishing }
+        assertEquals("[Datei: a.txt]\nAlpha", FileBridge.take("com.example.chat"))
+    }
+
+    @Test
+    fun storeDefaultsAndEditedTemplates() {
+        val store = SignatureStore(context)
+        assertTrue(store.filePreview)
+        assertEquals(listOf("Zusammenfassen", "Analysieren", "Fragen finden"), store.queryTemplates.map { it.name })
+        store.queryTemplatesText = "## Eigene\nMach etwas."
+        assertEquals(listOf(QueryTemplate("Eigene", "Mach etwas.")), SignatureStore(context).queryTemplates)
+        // Bewusst leer gelassen: keine Vorlagen (nicht die mitgelieferten).
+        store.queryTemplatesText = ""
+        assertTrue(SignatureStore(context).queryTemplates.isEmpty())
+        launch(write("a.txt", "Alpha"))
+        val d = waitForDialog("1 Datei bereit")
+        assertTrue(d.window!!.decorView.findViewWithTag<View>("query:Zusammenfassen") == null)
+        assertTrue(d.view<RadioButton>("query:").isChecked)
+        assertEquals("[Datei: a.txt]\nAlpha", d.view<TextView>("preview").text.toString())
     }
 
     // ------------------------------------------------------------------ Datei-Anbieter
